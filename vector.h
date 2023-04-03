@@ -4,6 +4,7 @@
 #include <new>
 #include <utility>
 #include <memory>
+#include <algorithm>
 
 
 template <typename T>
@@ -102,6 +103,9 @@ public:
     Vector(Vector&& other) noexcept;
     ~Vector();
 
+    using iterator = T*;
+    using const_iterator = const T*;
+
     Vector& operator=(const Vector& other);
     Vector& operator=(Vector&& other) noexcept;
 
@@ -116,6 +120,7 @@ public:
 
     template<typename... Args>
     T& EmplaceBack(Args&&... args);
+
 
 
     size_t Size() const noexcept {
@@ -134,6 +139,31 @@ public:
         assert(index < size_);
         return data_[index];
     }
+
+    iterator begin() noexcept {
+        return data_.GetAddress();
+    }
+    iterator end() noexcept {
+        return data_ + size_;
+    }
+    const_iterator begin() const noexcept {
+        return cbegin();
+    }
+    const_iterator end() const noexcept {
+        return cend();
+    }
+    const_iterator cbegin() const noexcept {
+        return data_.GetAddress();
+    }
+    const_iterator cend() const noexcept {
+        return data_ + size_;
+    }
+
+    template<typename... Args>
+    iterator Emplace(const_iterator pos, Args&&... args);
+    iterator Erase(const_iterator pos);
+    iterator Insert(const_iterator pos, const T& value);
+    iterator Insert(const_iterator pos, T&& value);
 
 private:
     RawMemory<T> data_;
@@ -330,4 +360,72 @@ T& Vector<T>::EmplaceBack(Args&&... args) {
     ++size_;
 
     return data_[size_-1];
+}
+
+template<typename T>
+template<typename... Args>
+typename Vector<T>::iterator Vector<T>::Emplace(typename Vector<T>::const_iterator pos, Args &&... args) {
+    assert((pos - begin()) <= static_cast<int>(size_));
+    assert((end() - pos) <= static_cast<int>(size_));
+
+    size_t pos_index = pos - begin();
+    iterator current_pos = begin() + pos_index;
+    iterator result = current_pos;
+
+    if (size_ == Capacity()) {
+
+        RawMemory<T> new_buffer(size_ == 0 ? 1 : size_ * 2);
+        iterator new_pos = new_buffer + pos_index;
+        new (new_pos) T (std::forward<Args>(args)...);
+
+        if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+            std::uninitialized_move_n(data_.GetAddress(), pos_index, new_buffer.GetAddress());
+            std::uninitialized_move_n(data_ + pos_index, size_ - pos_index, new_pos + 1);
+        } else {
+            std::uninitialized_copy_n(data_.GetAddress(), pos_index, new_buffer.GetAddress());
+            std::uninitialized_copy_n(data_ + pos_index, size_ - pos_index, new_pos + 1);
+        }
+
+        std::destroy_n(data_.GetAddress(), size_);
+        data_.Swap(new_buffer);
+
+        result = new_pos;
+    } else if (current_pos == end()) {
+        new (current_pos) T (std::forward<Args>(args)...);
+    } else{
+        T temp_el(std::forward<Args>(args)...);
+        new (end()) T (std::forward<T>(*(end() - 1)));
+        std::move_backward(current_pos, end() - 1, end());
+//        new (current_pos) T (std::forward<T>(temp_el));
+        *current_pos = std::move(temp_el);
+    }
+
+    ++size_;
+    return result;
+}
+
+template<typename T>
+typename Vector<T>::iterator Vector<T>::Insert(typename Vector<T>::const_iterator pos, const T &value) {
+    return Emplace(pos, value);
+}
+
+template<typename T>
+typename Vector<T>::iterator Vector<T>::Insert(typename Vector<T>::const_iterator pos, T&& value) {
+    return Emplace(pos, std::move(value));
+}
+
+template<typename T>
+typename Vector<T>::iterator Vector<T>::Erase(typename Vector<T>::const_iterator pos) {
+    assert((pos - begin()) <= static_cast<int>(size_));
+    assert((end() - pos) <= static_cast<int>(size_));
+    assert(pos != end());
+    assert(size_ != 0);
+
+    size_t pos_index = pos - begin();
+    iterator current_pos = begin() + pos_index;
+    current_pos->~T();
+    std::move(current_pos + 1, end(), current_pos);
+    iterator result = data_ + pos_index;
+    --size_;
+    return result;
 }
